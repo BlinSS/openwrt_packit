@@ -10,8 +10,6 @@ on:
         default: "6.1.y"
 
 env:
-  # 强制让所有 GitHub 动作组件使用 Node 24 运行，彻底解决 EOL 警告
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   # 使用您指定的 ImmortalWrt 25.12.0 官方 rootfs
   OPENWRT_ARMVIRT: "https://immortalwrt.org"
   # 锁定设备参数
@@ -26,8 +24,9 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
+    # 升级至 v6，原生支持 Node 24 运行环境
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Initialization Environment
       id: init
@@ -68,8 +67,9 @@ jobs:
         fi
         cd ./artifact && ls -l
 
+    # 升级至 v3，完美原生适配新版 GitHub 运行器
     - name: Upload Firmware to Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       if: env.compile_status == 'success' && !cancelled()
       with:
         tag_name: ImmortalWrt-25.12.0-l1pro-${{ steps.init.outputs.version }}
