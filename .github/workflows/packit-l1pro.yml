@@ -12,7 +12,7 @@ on:
 env:
   # 使用您指定的 ImmortalWrt 25.12.0 官方 rootfs
   OPENWRT_ARMVIRT: "https://immortalwrt.org"
-  # 锁定设备参数：告诉通用的 mk_openwrt.sh 脚本我们要打 rk3328 平台
+  # 【底层核心配置】告诉 main.sh 脚本我们要处理 rk3328 平台以及 l1pro 机型
   SOC: "rk3328"
   BOARD: "l1pro"
   WHOLE_PACK: "false"
@@ -40,20 +40,19 @@ jobs:
 
     - name: Download ImmortalWrt Rootfs
       run: |
+        # 对应 ophub 框架体系，rootfs 应该规范存放在 openwrt-armvirt 目录下
         mkdir -p openwrt-armvirt
         echo "Downloading: ${{ env.OPENWRT_ARMVIRT }}"
-        # 下载官方 rootfs 并规范命名，供脚本解压使用
         curl -Lo openwrt-armvirt/openwrt-armvirt-64-default-rootfs.tar.gz "${{ env.OPENWRT_ARMVIRT }}"
 
     - name: Package OpenWrt Image
       run: |
         sudo chmod +x *.sh
         
-        # 提取填入的内核版本
+        # 提取填入的内核版本并重刷参数配置文件
         INPUT_KERNEL="${{ github.event.inputs.set_kernel }}"
         KERNEL_VERSION="${INPUT_KERNEL:-6.12.y}"
         
-        # 写入或覆盖配置文件中的内核版本
         if [ -f "make.env" ]; then
             sed -i "s/KERNEL_VERSION=.*/KERNEL_VERSION=\"${KERNEL_VERSION}\"/g" make.env || true
         fi
@@ -61,13 +60,13 @@ jobs:
         
         echo "当前打包使用的最终内核目标版本为: ${KERNEL_VERSION}"
         
-        # 【核心修正】调用仓库自带的通用打包主入口脚本
-        sudo ./mk_openwrt.sh
+        # 【核心修正】该仓库的通用统一调度主入口是公用的 main.sh，它会自行根据系统变量加载 rk3328
+        sudo ./main.sh
 
     - name: Process Output Files
       run: |
         mkdir -p ./artifact
-        # 统一搜寻产出固件
+        # 统一搜寻产出固件并移动至临时发布目录
         if [ -d "output" ]; then
             mv output/* ./artifact/ || true
         elif [ -d "out" ]; then
@@ -86,7 +85,7 @@ jobs:
           * **系统源码**: ImmortalWrt 25.12.0 Stable 
           * **固件内核**: Linux Kernel ${{ github.event.inputs.set_kernel || '6.12.y' }} LTS
           * **适配硬件**: 我家云 / 联想 L1 Pro (RK3328)
-          * **打包脚本**: BlinSS/openwrt_packit (mk_openwrt.sh)
+          * **打包脚本**: BlinSS/openwrt_packit (main.sh)
         files: |
           artifact/*.img
           artifact/*.gz
