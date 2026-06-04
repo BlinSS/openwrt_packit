@@ -1,86 +1,98 @@
 name: Packit ImmortalWrt for RK3328 L1Pro
 
 on:
-  workflow_dispatch: # 支持手动触发打包
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      set_kernel:
+        description: "选择打包的内核版本 (默认 6.1.y)"
+        required: false
+        default: "6.12.y"
 
 env:
+  # 使用您指定的 ImmortalWrt 25.12.0 官方 rootfs
+  OPENWRT_ARMVIRT: "https://downloads.immortalwrt.org/releases/25.12.0/targets/armsr/armv8/immortalwrt-25.12.0-armsr-armv8-rootfs.tar.gz"
+  # 锁定设备为 rk3328 (包含 l1pro)
+  SOC: "rk3328"
+  # 锁定打包 l1pro (我家云/联想L1 Pro)
+  BOARD: "l1pro"
+  # 是否打包为全志/瑞芯微/晶晨等多合一设备？这里设为 false，只打特定的 rk3328
+  WHOLE_PACK: "false"
   TZ: Asia/Shanghai
-  ROOTFS_URL: "https://downloads.immortalwrt.org/releases/25.12.0/targets/armsr/armv8/immortalwrt-25.12.0-armsr-armv8-rootfs.tar.gz"
-  # 预选一个比较稳定的 Flippy 内核版本（打包脚本内部默认包含或去对应仓库拉取）
-  KERNEL_VERSION: "6.1.y" 
 
 jobs:
-  packit:
+  build:
     runs-on: ubuntu-22.04
+    if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
-    - name: Checkout Repository
+    - name: Checkout
       uses: actions/checkout@v4
 
     - name: Initialization Environment
+      id: init
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/libexec/docker/cli-plugins/docker-buildx
         sudo apt-get update
-        sudo apt-get -y install pigz uuid-runtime gawk axel
+        # 补齐原生工作流所需的依赖
+        sudo apt-get -y install pigz uuid-runtime gawk axel qemu-user-static
         sudo timedatectl set-timezone "${TZ}"
+        
+        # 创建工作流运行标识
+        echo "compile_status=success" >> $GITHUB_ENV
+        echo "version=$(date +%Y.%m.%d)" >> $GITHUB_OUTPUT
 
     - name: Download ImmortalWrt Rootfs
       run: |
-        # 将下载的 rootfs 命名为脚本默认识别的通用标准名称
-        cat <<EOF
-        Downloading Rootfs from: ${{ env.ROOTFS_URL }}
-        EOF
-        curl -Lo openwrt-armvirt-64-default-rootfs.tar.gz "${{ env.ROOTFS_URL }}"
+        # 创建根文件系统存放目录（适配原仓库逻辑）
+        mkdir -p openwrt-armvirt
+        echo "Downloading: ${{ env.OPENWRT_ARMVIRT }}"
+        curl -Lo openwrt-armvirt/openwrt-armvirt-64-default-rootfs.tar.gz "${{ env.OPENWRT_ARMVIRT }}"
 
-    - name: Prepare Flippy Kernels
+    - name: Package OpenWrt Image
       run: |
-        # 创建内核存放目录
-        mkdir -p kernel
-        
-        # 提示：Flippy 脚本打包需要对应的内核 tar 包（包含 boot-*.tar.gz, modules-*.tar.gz, dtb-*.tar.gz）
-        # 很多第三方维护的 openwrt_packit 会从公用仓库拉取内核。这里我们先通过环境变量或 make.env 指定内核版本
-        if [ -f "make.env" ]; then
-          sed -i 's/KERNEL_VERSION=.*/KERNEL_VERSION="${{ env.KERNEL_VERSION }}"/g' make.env || true
-        fi
-
-    - name: Run Packit Script for L1Pro
-      run: |
+        # 设置执行权限
         sudo chmod +x *.sh
         
-        # 运行专门针对我家云/联想 L1 Pro 的打包脚本
-        if [ -f "mk_rk3328_l1pro.sh" ]; then
-          sudo ./mk_rk3328_l1pro.sh
-        else
-          echo "未找到 mk_rk3328_l1pro.sh，尝试通用 rk3328 脚本并指定 L1Pro"
-          # 如果仓库改版了，可以使用通用脚本并注入变量
-          sudo BOARD=l1pro ./mk_rk3328.sh || sudo ./mk_rk3328.sh
+        # 注入用户选择的内核
+        INPUT_KERNEL="${{ github.event.inputs.set_kernel }}"
+        KERNEL_VERSION="${INPUT_KERNEL:-6.1.y}"
+        if [ -f "make.env" ]; then
+            sed -i "s/KERNEL_VERSION=.*/KERNEL_VERSION=\"${KERNEL_VERSION}\"/g" make.env || true
         fi
+        
+        # 核心打包命令：调用原仓库的通用打包入口，传入 rk3328 环境变量
+        # 原仓库脚本会自动从 ophub 的云端仓库去拉取对应的 Flippy 内核包
+        sudo ./mk_rk3328.sh
 
-    - name: Prepare Artifacts
+    - name: Process Output Files
       run: |
-        mkdir -p ./release_firmware
-        # 搜寻打包出来的 output 或 out 目录下的 img 固件
+        mkdir -p ./artifact
+        # 寻找当前目录下或者 output 目录下的固件
         if [ -d "output" ]; then
-          mv output/* ./release_firmware/ || true
+            mv output/* ./artifact/ || true
         elif [ -d "out" ]; then
-          mv out/* ./release_firmware/ || true
+            mv out/* ./artifact/ || true
         fi
+        
+        # 移除未打包成功的死链接或空文件
+        cd ./artifact && ls -l
 
     - name: Upload Firmware to Release
       uses: softprops/action-gh-release@v2
-      if: success()
+      if: env.compile_status == 'success' && !cancelled()
       with:
-        tag_name: ImmortalWrt-25.12.0-L1Pro-${{ github.run_id }}
+        tag_name: ImmortalWrt-25.12.0-l1pro-${{ steps.init.outputs.version }}
         name: MyCloud L1Pro ImmortalWrt 25.12.0
         body: |
           ### 固件信息
-          * **源码版本**: ImmortalWrt 25.12.0 Stable
-          * **打包设备**: 我家云 / 联想 L1 Pro (RK3328)
-          * **内核分支**: ${{ env.KERNEL_VERSION }}
-          * **默认IP**: 192.168.1.1 (或根据源码设定)
+          * **官方源码**: ImmortalWrt 25.12.0 Stable
+          * **硬件架构**: armsr-armv8 (通用 ARM64)
+          * **适配机型**: 我家云 / 联想 L1 Pro (RK3328)
+          * **打包基准**: 基于 BlinSS/openwrt_packit 自动流
         files: |
-          release_firmware/*.img
-          release_firmware/*.gz
-          release_firmware/*.xz
+          artifact/*.img
+          artifact/*.gz
+          artifact/*.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
