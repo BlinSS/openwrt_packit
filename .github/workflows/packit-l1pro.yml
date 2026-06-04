@@ -1,18 +1,18 @@
-name: Packit ImmortalWrt for RK3328 L1Pro
+name: Packit ImmortalWrt for RK3328 L1Pro (Kernel 6.12)
 
 on:
   repository_dispatch:
   workflow_dispatch:
     inputs:
       set_kernel:
-        description: "选择打包的内核版本 (默认 6.1.y)"
+        description: "选择打包的内核版本"
         required: false
-        default: "6.1.y"
+        default: "6.12.y"
 
 env:
   # 使用您指定的 ImmortalWrt 25.12.0 官方 rootfs
   OPENWRT_ARMVIRT: "https://immortalwrt.org"
-  # 锁定设备参数
+  # 锁定设备参数：告诉通用的 mk_openwrt.sh 脚本我们要打 rk3328 平台
   SOC: "rk3328"
   BOARD: "l1pro"
   WHOLE_PACK: "false"
@@ -24,7 +24,6 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
-    # 升级至 v6，原生支持 Node 24 运行环境
     - name: Checkout
       uses: actions/checkout@v6
 
@@ -43,23 +42,32 @@ jobs:
       run: |
         mkdir -p openwrt-armvirt
         echo "Downloading: ${{ env.OPENWRT_ARMVIRT }}"
+        # 下载官方 rootfs 并规范命名，供脚本解压使用
         curl -Lo openwrt-armvirt/openwrt-armvirt-64-default-rootfs.tar.gz "${{ env.OPENWRT_ARMVIRT }}"
 
     - name: Package OpenWrt Image
       run: |
         sudo chmod +x *.sh
         
+        # 提取填入的内核版本
         INPUT_KERNEL="${{ github.event.inputs.set_kernel }}"
-        KERNEL_VERSION="${INPUT_KERNEL:-6.1.y}"
+        KERNEL_VERSION="${INPUT_KERNEL:-6.12.y}"
+        
+        # 写入或覆盖配置文件中的内核版本
         if [ -f "make.env" ]; then
             sed -i "s/KERNEL_VERSION=.*/KERNEL_VERSION=\"${KERNEL_VERSION}\"/g" make.env || true
         fi
+        sed -i "s/KERNEL_VERSION=\"6.1.y\"/KERNEL_VERSION=\"${KERNEL_VERSION}\"/g" *.sh *.env 2>/dev/null || true
         
-        sudo ./mk_rk3328.sh
+        echo "当前打包使用的最终内核目标版本为: ${KERNEL_VERSION}"
+        
+        # 【核心修正】调用仓库自带的通用打包主入口脚本
+        sudo ./mk_openwrt.sh
 
     - name: Process Output Files
       run: |
         mkdir -p ./artifact
+        # 统一搜寻产出固件
         if [ -d "output" ]; then
             mv output/* ./artifact/ || true
         elif [ -d "out" ]; then
@@ -67,19 +75,18 @@ jobs:
         fi
         cd ./artifact && ls -l
 
-    # 升级至 v3，完美原生适配新版 GitHub 运行器
     - name: Upload Firmware to Release
       uses: softprops/action-gh-release@v3
       if: env.compile_status == 'success' && !cancelled()
       with:
-        tag_name: ImmortalWrt-25.12.0-l1pro-${{ steps.init.outputs.version }}
-        name: MyCloud L1Pro ImmortalWrt 25.12.0
+        tag_name: ImmortalWrt-25.12.0-l1pro-k6.12-${{ steps.init.outputs.version }}
+        name: MyCloud L1Pro ImmortalWrt 25.12.0 (Kernel 6.12)
         body: |
-          ### 固件信息
-          * **官方源码**: ImmortalWrt 25.12.0 Stable
-          * **硬件架构**: armsr-armv8 (通用 ARM64)
-          * **适配机型**: 我家云 / 联想 L1 Pro (RK3328)
-          * **打包基准**: 基于 BlinSS/openwrt_packit 自动流
+          ### 固件基本配置
+          * **系统源码**: ImmortalWrt 25.12.0 Stable 
+          * **固件内核**: Linux Kernel ${{ github.event.inputs.set_kernel || '6.12.y' }} LTS
+          * **适配硬件**: 我家云 / 联想 L1 Pro (RK3328)
+          * **打包脚本**: BlinSS/openwrt_packit (mk_openwrt.sh)
         files: |
           artifact/*.img
           artifact/*.gz
